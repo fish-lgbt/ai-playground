@@ -70,6 +70,12 @@ async function* raceAll<Output>(input: Promise<Output>[]) {
   while (promises.length) yield Promise.race(promises);
 }
 
+const getTimeToRateLimitReset = () => {
+  const midnightTonight = new Date();
+  midnightTonight.setHours(24, 0, 0, 0);
+  return humanTime(midnightTonight.getTime() - Date.now());
+};
+
 export const submitUserMessage = async (userInput: string): Promise<Message> => {
   'use server';
 
@@ -101,7 +107,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
     return {
       id: Date.now(),
       role: 'system',
-      content: 'You are currently rate limited. Please try again later.',
+      content: `You are currently rate limited. Your limit will reset in ${getTimeToRateLimitReset}.`,
     };
   }
 
@@ -247,16 +253,13 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             ]);
 
             // If the user is rate limited, tell them
-            if (rateLimit.isLimited) return <div>You are currently rate limited</div>;
-
-            const midnightTonight = new Date();
-            midnightTonight.setHours(24, 0, 0, 0);
-            const timeTillReset = humanTime(midnightTonight.getTime() - Date.now());
+            if (rateLimit.isLimited)
+              return <div>You are currently rate limited, this limit resets in {getTimeToRateLimitReset()}</div>;
 
             // If the user isn't rate limited, return the remaining requests
             return (
               <div>
-                You have {rateLimit.remaining} requests remaining, this limit resets in {timeTillReset}
+                You have {rateLimit.remaining} requests remaining, this limit resets in {getTimeToRateLimitReset()}
               </div>
             );
           },
