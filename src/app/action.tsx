@@ -126,7 +126,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
         // text can be streamed from the LLM, but we only want to close the stream with .done() when its completed.
         // done() marks the state as available for the client to access
         if (done) {
-          logger.info('replying with text');
+          console.info('replying with text');
 
           aiState.done([
             ...aiState.get(),
@@ -149,7 +149,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             })
             .required(),
           render: async function* (_props) {
-            logger.info('replying with create_image');
+            console.info('replying with create_image');
             // I really have no fucking idea why this is needed but if i dont do it we get undefined
             const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
             const prompt = props.prompt;
@@ -164,7 +164,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             const images: string[] = [];
 
             try {
-              logger.info('generating images', {
+              console.info('generating images', {
                 number_of_images,
               });
               const startTime = Date.now();
@@ -190,7 +190,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
 
               return <Images prompt={prompt} images={images} timeTaken={timeTaken} />;
             } catch (error) {
-              logger.error('Failed generating images', {
+              console.error('Failed generating images', {
                 error,
               });
               if (error instanceof Error) {
@@ -222,7 +222,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             .required(),
           // flightNumber is inferred from the parameters passed above
           render: async function* ({ flightNumber }) {
-            logger.info('replying with get_flight_info');
+            console.info('replying with get_flight_info');
             yield <Loading />;
             const flightInfo = await getFlightInfo(flightNumber);
 
@@ -252,7 +252,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
       throw new Error('Unknown error');
     }
 
-    logger.error('An error occurred', {
+    console.error('An error occurred', {
       error,
     });
 
@@ -319,7 +319,7 @@ const createImage = async (prompt: string) => {
     num_steps: 10,
   } satisfies AiTextToImageInput;
 
-  logger.info('Fetching image', {
+  console.info('Fetching image', {
     prompt,
   });
 
@@ -329,7 +329,7 @@ const createImage = async (prompt: string) => {
     3,
   );
 
-  logger.info('Fetched image', {
+  console.info('Fetched image', {
     prompt,
   });
 
