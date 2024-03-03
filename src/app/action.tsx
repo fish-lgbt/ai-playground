@@ -151,12 +151,9 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           render: async function* (_props) {
             console.info('replying with create_image');
             // I really have no fucking idea why this is needed but if i dont do it we get undefined
-            const props =
-              process.env.NODE_ENV === 'development'
-                ? (JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props)
-                : _props;
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
             const prompt = props.prompt;
-            const number_of_images = Math.min(50, props.number_of_images);
+            const number_of_images = Math.min(50, props.number_of_images) ?? 1;
 
             yield (
               <div>{`Generating ${
