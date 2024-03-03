@@ -5,9 +5,11 @@ import z from 'zod';
 import { AiTextToImageInput } from '@cloudflare/ai/dist/tasks/text-to-image';
 import { Ai } from '@cloudflare/ai';
 import { getRequestContext } from '@cloudflare/next-on-pages';
-import { SignInButton, SignedIn, SignedOut, UserButton, auth, useClerk } from '@clerk/nextjs';
+import { SignInButton, SignedIn, SignedOut, UserButton, auth } from '@clerk/nextjs';
 import { Message } from '@/components/messages';
-import { FlightCard, getFlightInfo } from '@/components/flight-card';
+import Markdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 const getRateLimit = async (identifier: string, limit = 1_000, period = '1d') => {
   const namespace = '076021b1-3a73-45b3-8c6e-1a3d19654708'; // rlimit.com namespace ID
@@ -153,7 +155,28 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           ]);
         }
 
-        return <div>{content}</div>;
+        return (
+          <Markdown
+            components={{
+              code(props) {
+                const { children, className, node, ...rest } = props;
+                const match = /language-(\w+)/.exec(className || '');
+                return match ? (
+                  // @ts-expect-error
+                  <SyntaxHighlighter {...rest} PreTag="div" language={match[1]} style={oneDark}>
+                    {String(children).replace(/\n$/, '')}
+                  </SyntaxHighlighter>
+                ) : (
+                  <code {...rest} className={className}>
+                    {children}
+                  </code>
+                );
+              },
+            }}
+          >
+            {content}
+          </Markdown>
+        );
       },
       tools: {
         create_image: {
