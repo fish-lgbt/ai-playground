@@ -149,7 +149,9 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             })
             .required(),
           render: async function* (_props) {
-            console.info('replying with create_image');
+            console.info('replying with create_image', {
+              props: _props,
+            });
             // I really have no fucking idea why this is needed but if i dont do it we get undefined
             const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
             const prompt = props.prompt;
