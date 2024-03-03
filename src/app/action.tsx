@@ -8,28 +8,11 @@ import { getRequestContext } from '@cloudflare/next-on-pages';
 import { SignInButton, SignedIn, SignedOut, UserButton, auth, useClerk } from '@clerk/nextjs';
 import { Message } from '@/components/messages';
 import { FlightCard, getFlightInfo } from '@/components/flight-card';
+import { logger } from '@/logger';
 
-const SignOutButton = () => {
-  'use client';
-  const { signOut } = useClerk();
-
-  const onClick = () =>
-    signOut(() => {
-      // Clear the chat history
-      const aiState = getMutableAIState<typeof AI>();
-      aiState.update([]);
-    });
-
-  return (
-    // Clicking on this button will sign out a user and reroute them to the "/" (home) page.
-    <button onClick={onClick}>Sign out</button>
-  );
-};
-
-const isRateLimited = async (identifier: string, limit = 100, period = '1h') => {
+const isRateLimited = async (identifier: string, limit = 1_000, period = '1d') => {
   const namespace = '076021b1-3a73-45b3-8c6e-1a3d19654708'; // rlimit.com namespace ID
-  // limit $key to 100 requests every 1h
-  const response = await fetch(`https://rlimit.com/${namespace}/${100}/1h/${identifier}`);
+  const response = await fetch(`https://rlimit.com/${namespace}/${limit}/${period}/${identifier}`);
 
   // If the request fails, the user is rate limited
   return !response.ok;
@@ -109,7 +92,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
     return {
       id: Date.now(),
       role: 'system',
-      content: 'You have reached your limit for this hour',
+      content: 'You are currently rate limited. Please try again later.',
     };
   }
 
@@ -143,6 +126,8 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
         // text can be streamed from the LLM, but we only want to close the stream with .done() when its completed.
         // done() marks the state as available for the client to access
         if (done) {
+          logger.debug('replying with text');
+
           aiState.done([
             ...aiState.get(),
             {
@@ -152,7 +137,6 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           ]);
         }
 
-        console.log('replying with text');
         return <div>{content}</div>;
       },
       tools: {
@@ -165,7 +149,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             })
             .required(),
           render: async function* (_props) {
-            console.log('replying with create_image');
+            logger.debug('replying with create_image');
             // I really have no fucking idea why this is needed but if i dont do it we get undefined
             const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
             const prompt = props.prompt;
@@ -180,7 +164,9 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             const images: string[] = [];
 
             try {
-              console.log('generating %s images', number_of_images);
+              logger.debug('generating images', {
+                number_of_images,
+              });
               const startTime = Date.now();
 
               for await (const image of raceAll(Array.from({ length: number_of_images }, () => createImage(prompt)))) {
@@ -204,7 +190,9 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
 
               return <Images prompt={prompt} images={images} timeTaken={timeTaken} />;
             } catch (error) {
-              console.log(error);
+              logger.error('Failed generating images', {
+                error,
+              });
               if (error instanceof Error) {
                 return (
                   <pre>
@@ -234,7 +222,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             .required(),
           // flightNumber is inferred from the parameters passed above
           render: async function* ({ flightNumber }) {
-            console.log('replying with get_flight_info');
+            logger.debug('replying with get_flight_info');
             yield <Loading />;
             const flightInfo = await getFlightInfo(flightNumber);
 
@@ -251,41 +239,6 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             return <FlightCard flightInfo={flightInfo} />;
           },
         },
-        authentication: {
-          description: 'Handle authentication actions',
-          parameters: z
-            .object({
-              action: z.enum(['sign_in', 'sign_out', 'details']).describe('the action to perform'),
-            })
-            .required(),
-          render: function* (props) {
-            const { action } = JSON.parse(JSON.parse(JSON.stringify(props))) as typeof props;
-            if (!['sign_in', 'sign_out', 'details'].includes(action)) {
-              return <div>Invalid action: {action}</div>;
-            }
-
-            if (action === 'details') {
-              return (
-                <div>
-                  <SignedIn>
-                    <UserButton />
-                  </SignedIn>
-                  <SignedOut>
-                    <SignInButton />
-                  </SignedOut>
-                </div>
-              );
-            }
-
-            if (action === 'sign_in') {
-              return <SignInButton />;
-            }
-
-            if (action === 'sign_out') {
-              return <SignOutButton />;
-            }
-          },
-        },
       },
     });
 
@@ -299,7 +252,9 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
       throw new Error('Unknown error');
     }
 
-    console.log('An error occurred:', error.message, error.stack, error.cause);
+    logger.error('An error occurred', {
+      error,
+    });
 
     return {
       id: Date.now(),
@@ -364,8 +319,9 @@ const createImage = async (prompt: string) => {
     num_steps: 10,
   } satisfies AiTextToImageInput;
 
-  const label = `fetching image with prompt: "${prompt}" ` + Math.random();
-  console.time(label);
+  logger.debug('Fetching image', {
+    prompt,
+  });
 
   // Fetch the image
   const response = await retryPromise(
@@ -373,7 +329,9 @@ const createImage = async (prompt: string) => {
     3,
   );
 
-  console.timeEnd(label);
+  logger.debug('Fetched image', {
+    prompt,
+  });
 
   // Convert the response into a base64 image
   const base64 = btoa(new Uint8Array(response).reduce((data, byte) => data + String.fromCharCode(byte), ''));

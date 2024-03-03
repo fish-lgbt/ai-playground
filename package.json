@@ -12,10 +12,13 @@
     "deploy": "npm run pages:build && wrangler pages deploy .vercel/output/static"
   },
   "dependencies": {
+    "@axiomhq/js": "^1.0.0-rc.2",
     "@clerk/nextjs": "^4.29.9",
+    "@clerk/themes": "^1.7.9",
     "@cloudflare/ai": "^1.0.53",
     "ai": "^3.0.2",
     "next": "14.1.1",
+    "next-axiom": "github:imlunahey/next-axiom#feat/middleware",
     "openai": "^4.28.4",
     "react": "^18",
     "react-dom": "^18",
