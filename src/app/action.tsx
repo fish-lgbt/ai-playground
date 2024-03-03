@@ -145,7 +145,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           parameters: z
             .object({
               prompt: z.string().describe('the prompt to generate the image from'),
-              number_of_images: z.number().min(1).max(50).optional().default(1).describe('the number of images to generate'),
+              number_of_images: z.number().min(1).max(50).default(1).describe('the number of images to generate'),
             })
             .required(),
           render: async function* (_props) {
@@ -155,7 +155,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             // I really have no fucking idea why this is needed but if i dont do it we get undefined
             const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
             const prompt = props.prompt;
-            const number_of_images = Math.min(50, props.number_of_images) ?? 1;
+            const number_of_images = Math.min(50, props.number_of_images ?? 1);
 
             yield (
               <div>{`Generating ${
