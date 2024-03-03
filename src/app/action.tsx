@@ -165,6 +165,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
 
             try {
               console.info('generating images', {
+                prompt,
                 number_of_images,
               });
               const startTime = Date.now();
@@ -176,6 +177,12 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
               }
 
               const timeTaken = Date.now() - startTime;
+
+              console.info('generated images', {
+                prompt,
+                number_of_images,
+                timeTaken,
+              });
 
               aiState.done([
                 ...aiState.get(),
