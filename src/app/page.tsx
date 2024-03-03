@@ -39,8 +39,8 @@ export default function Page() {
   };
 
   return (
-    <main className="flex flex-col items-center h-screen w-full">
-      <div className="flex flex-col p-2 gap-2 items-center h-full w-1/2 border">
+    <main className="flex flex-col items-center h-[100dvh] w-full">
+      <div className="flex flex-col p-2 gap-2 items-center h-[100dvh] md:w-1/2 border">
         <Messages messages={messages} />
 
         <div className="flex flex-row gap-2 w-full">
