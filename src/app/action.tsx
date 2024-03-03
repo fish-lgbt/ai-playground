@@ -8,14 +8,19 @@ import { getRequestContext } from '@cloudflare/next-on-pages';
 import { SignInButton, SignedIn, SignedOut, UserButton, auth, useClerk } from '@clerk/nextjs';
 import { Message } from '@/components/messages';
 import { FlightCard, getFlightInfo } from '@/components/flight-card';
-import { logger } from '@/logger';
 
-const isRateLimited = async (identifier: string, limit = 1_000, period = '1d') => {
+const getRateLimit = async (identifier: string, limit = 1_000, period = '1d') => {
   const namespace = '076021b1-3a73-45b3-8c6e-1a3d19654708'; // rlimit.com namespace ID
   const response = await fetch(`https://rlimit.com/${namespace}/${limit}/${period}/${identifier}`);
+  const body = await response.json<{
+    ok: boolean;
+    remaining: number;
+  }>();
 
-  // If the request fails, the user is rate limited
-  return !response.ok;
+  return {
+    isLimited: body.remaining <= 0,
+    remaining: body.remaining,
+  };
 };
 
 type ImagesProps = {
@@ -26,7 +31,11 @@ type ImagesProps = {
 
 // How much time this took
 const humanTime = (time: number) => {
-  return time < 1_000 ? `${time}ms` : time < 60_000 ? `${(time / 1_000).toFixed(2)}s` : `${(time / 60_000).toFixed(2)}m`;
+  if (time < 0) return '0ms';
+  if (time < 1_000) return `${time}ms`;
+  if (time < 60_000) return `${(time / 1_000).toFixed(2)}s`;
+  if (time < 3_600_000) return `${(time / 60_000).toFixed(2)}m`;
+  return `${(time / 3_600_000).toFixed(2)}h`;
 };
 
 const Images = ({ images, prompt, timeTaken }: ImagesProps) => {
@@ -87,8 +96,8 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
   }
 
   // User has reached their limit
-  const isLimited = await isRateLimited(userId);
-  if (isLimited) {
+  const rateLimit = await getRateLimit(userId);
+  if (rateLimit.isLimited) {
     return {
       id: Date.now(),
       role: 'system',
@@ -222,32 +231,62 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             }
           },
         },
-        get_flight_info: {
-          description: 'Get the information for a flight',
-          parameters: z
-            .object({
-              flightNumber: z.string().describe('the number of the flight'),
-            })
-            .required(),
-          // flightNumber is inferred from the parameters passed above
-          render: async function* ({ flightNumber }) {
-            console.info('replying with get_flight_info');
-            yield <Loading />;
-            const flightInfo = await getFlightInfo(flightNumber);
+        ratelimit: {
+          description: "Get details about the user's rate limit",
+          parameters: z.object({}).required(),
+          render: async function () {
+            const rateLimit = await getRateLimit(userId);
 
             aiState.done([
               ...aiState.get(),
               {
                 role: 'function',
-                name: 'get_flight_info',
-                // Content can be any string to provide context to the LLM in the rest of the conversation
-                content: JSON.stringify(flightInfo),
+                name: 'ratelimit',
+                content: JSON.stringify(rateLimit),
               },
             ]);
 
-            return <FlightCard flightInfo={flightInfo} />;
+            // If the user is rate limited, tell them
+            if (rateLimit.isLimited) return <div>You are currently rate limited</div>;
+
+            const midnightTonight = new Date();
+            midnightTonight.setHours(24, 0, 0, 0);
+            const timeTillReset = humanTime(midnightTonight.getTime() - Date.now());
+
+            // If the user isn't rate limited, return the remaining requests
+            return (
+              <div>
+                You have {rateLimit.remaining} requests remaining, this limit resets in {timeTillReset}
+              </div>
+            );
           },
         },
+        // get_flight_info: {
+        //   description: 'Get the information for a flight',
+        //   parameters: z
+        //     .object({
+        //       flightNumber: z.string().describe('the number of the flight'),
+        //     })
+        //     .required(),
+        //   // flightNumber is inferred from the parameters passed above
+        //   render: async function* ({ flightNumber }) {
+        //     console.info('replying with get_flight_info');
+        //     yield <Loading />;
+        //     const flightInfo = await getFlightInfo(flightNumber);
+
+        //     aiState.done([
+        //       ...aiState.get(),
+        //       {
+        //         role: 'function',
+        //         name: 'get_flight_info',
+        //         // Content can be any string to provide context to the LLM in the rest of the conversation
+        //         content: JSON.stringify(flightInfo),
+        //       },
+        //     ]);
+
+        //     return <FlightCard flightInfo={flightInfo} />;
+        //   },
+        // },
       },
     });
 
