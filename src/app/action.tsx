@@ -131,7 +131,8 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
         {
           role: 'system',
           content:
-            'You are an assistant, if you dont know what the user asked or get confused reply with something sassy. All images you generate should have extra words added, make them look nicer without the user needing todo it themselves unless they ask for you to do their exact prompt and then listen to that.',
+            'You are an assistant, if you dont know what the user asked or get confused reply with something sassy.' +
+            'When generating an image you should add extra words to make them look nicer.',
         },
         { role: 'user', content: userInput },
       ],
@@ -262,6 +263,54 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
                 You have {rateLimit.remaining} requests remaining, this limit resets in {getTimeToRateLimitReset()}
               </div>
             );
+          },
+        },
+        describe_image: {
+          description: 'Describe an image',
+          parameters: z
+            .object({
+              image_url: z.string().describe('the image to describe'),
+            })
+            .required(),
+          render: async function* (_props) {
+            yield <Loading />;
+
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
+            const { image_url } = props;
+
+            // Fetch the image
+            const { env } = getRequestContext();
+            const ai = new Ai(env.AI);
+
+            console.info('Fetching image', {
+              image_url,
+            });
+
+            const image = await fetch(image_url)
+              .then((res) => res.arrayBuffer())
+              .then((buffer) => Array.from(new Uint8Array(buffer)));
+
+            console.info('Fetched image', {
+              image_url,
+            });
+
+            console.info('Describing image', {
+              image_url,
+            });
+
+            const response = (await ai.run('@cf/unum/uform-gen2-qwen-500m', {
+              image,
+              prompt: 'Describe the image',
+            })) as {
+              description: string;
+            };
+
+            console.info('Described image', {
+              image_url,
+              response,
+            });
+
+            return <div>{response.description}</div>;
           },
         },
         // get_flight_info: {
