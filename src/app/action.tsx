@@ -453,6 +453,88 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             return <div>{weatherInfo}</div>;
           },
         },
+        copy_image: {
+          description: 'Make an image that looks similar to the input image',
+          parameters: z
+            .object({
+              image_url: z.string().describe('the image to copy'),
+            })
+            .required(),
+          render: async function* (_props) {
+            yield <div>Let me have a look...</div>;
+
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props)) as string) as typeof _props;
+            const { image_url } = props;
+
+            // Fetch the image
+            const { env } = getRequestContext();
+            const ai = new Ai(env.AI);
+
+            yield <div>Fetching the image...</div>;
+
+            console.info('Fetching image', {
+              image_url,
+            });
+
+            const image = await fetch(image_url)
+              .then((res) => res.arrayBuffer())
+              .then((buffer) => Array.from(new Uint8Array(buffer)));
+
+            console.info('Fetched image', {
+              image_url,
+            });
+
+            yield <div>Describing the image...</div>;
+
+            console.info('Describing the image', {
+              image_url,
+            });
+
+            const response = (await ai.run('@cf/unum/uform-gen2-qwen-500m', {
+              image,
+              prompt: 'Describe the image',
+            })) as {
+              description: string;
+            };
+
+            console.info('Described the image', {
+              image_url,
+              response,
+            });
+
+            // Generate a new image based on the description
+            const prompt = response.description;
+
+            yield <div>Generating an image based on the description...</div>;
+
+            console.info('Generating image based on description', {
+              prompt,
+            });
+
+            const startTime = Date.now();
+            const url = await createImage(userId, prompt);
+            const urls = [url];
+
+            console.info('Generated image based on description', {
+              prompt,
+              urls,
+            });
+
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'copy_image',
+                content: JSON.stringify({
+                  prompt,
+                  urls,
+                }),
+              },
+            ]);
+
+            return <Images prompt={prompt} images={urls} timeTaken={Date.now() - startTime} />;
+          },
+        },
         // get_flight_info: {
         //   description: 'Get the information for a flight',
         //   parameters: z
