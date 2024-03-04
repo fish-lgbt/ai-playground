@@ -58,3 +58,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [ai]
 binding = "AI"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "ai-playground"

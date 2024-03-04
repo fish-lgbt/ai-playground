@@ -5,4 +5,6 @@ interface CloudflareEnv {
   // KV Example:
   // MY_KV: KVNamespace
   AI: Fetcher;
+
+  KV: KVNamespace;
 }

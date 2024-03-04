@@ -1,15 +1,20 @@
 'use server';
+
+import '@total-typescript/ts-reset';
+
+import { fetchWeatherApi } from 'openmeteo';
 import { OpenAI } from 'openai';
 import { createAI, getMutableAIState, render } from 'ai/rsc';
 import z from 'zod';
 import { AiTextToImageInput } from '@cloudflare/ai/dist/tasks/text-to-image';
 import { Ai } from '@cloudflare/ai';
 import { getRequestContext } from '@cloudflare/next-on-pages';
-import { SignInButton, SignedIn, SignedOut, UserButton, auth } from '@clerk/nextjs';
+import { SignInButton, SignedIn, SignedOut, UserButton, auth, clerkClient } from '@clerk/nextjs';
 import { Message } from '@/components/messages';
 import Markdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { uploadThing } from '@/upload-thing';
 
 const getRateLimit = async (identifier: string, limit = 1_000, period = '1d') => {
   const namespace = '076021b1-3a73-45b3-8c6e-1a3d19654708'; // rlimit.com namespace ID
@@ -88,18 +93,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
     return {
       id: Date.now(),
       role: 'system',
-      content: (
-        <>
-          <SignedIn>
-            {/* Mount the UserButton component */}
-            <UserButton />
-          </SignedIn>
-          <SignedOut>
-            {/* Signed out users get sign in button */}
-            <SignInButton />
-          </SignedOut>
-        </>
-      ),
+      content: <SignInButton>Click here to signin</SignInButton>,
     };
   }
 
@@ -125,6 +119,10 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
       },
     ]);
 
+    // Get the last 50 messages
+    const previousMessages = aiState.get();
+    const previousFityMessages = previousMessages.slice(-50);
+
     // render() returns a stream of UI components
     const ui = render({
       model: 'gpt-4-turbo-preview',
@@ -134,9 +132,12 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           role: 'system',
           content:
             'You are an assistant, if you dont know what the user asked or get confused reply with something sassy.' +
-            'When generating an image you should add extra words to make them look nicer.',
+            'When generating an image you should add extra words to make them look nicer, think about the camera, lighting, and the subject of the image.',
         },
-        { role: 'user', content: userInput },
+        ...previousFityMessages.map((message) => ({
+          role: message.role === 'user' ? ('user' as const) : ('assistant' as const),
+          content: message.content,
+        })),
       ],
       initial: <div>hmmm...</div>,
       // `text` is called when an AI returns a text response (as opposed to a tool call)
@@ -192,7 +193,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
               props: _props,
             });
             // I really have no fucking idea why this is needed but if i dont do it we get undefined
-            const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props)) as string) as typeof _props;
             const prompt = props.prompt;
             const number_of_images = Math.min(50, props.number_of_images ?? 1);
 
@@ -202,7 +203,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
               } using prompt "${prompt}"...`}</div>
             );
 
-            const images: string[] = [];
+            const urls: string[] = [];
 
             try {
               console.info('generating images', {
@@ -211,11 +212,37 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
               });
               const startTime = Date.now();
 
-              for await (const image of raceAll(Array.from({ length: number_of_images }, () => createImage(prompt)))) {
-                images.push(image);
+              for await (const image of raceAll(
+                Array.from({ length: number_of_images }, () => createImage(userId, prompt)),
+              )) {
+                urls.push(image);
 
-                yield <Images prompt={prompt} images={images} timeTaken={Date.now() - startTime} />;
+                yield <Images prompt={prompt} images={urls} timeTaken={Date.now() - startTime} />;
               }
+
+              console.info('Saving images', {
+                prompt,
+                urls,
+              });
+
+              const { env } = getRequestContext();
+              const imageId = crypto.randomUUID();
+              const data = {
+                urls,
+                prompt,
+                number_of_images,
+                timeTaken: Date.now() - startTime,
+                createdAt: new Date().toISOString(),
+              };
+
+              // Save the entry to the user's database
+              await env.KV.put(`images:${userId}:${imageId}`, JSON.stringify(data));
+
+              console.info('Saved image', {
+                prompt,
+                urls,
+                imageId,
+              });
 
               const timeTaken = Date.now() - startTime;
 
@@ -236,7 +263,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
                 },
               ]);
 
-              return <Images prompt={prompt} images={images} timeTaken={timeTaken} />;
+              return <Images prompt={prompt} images={urls} timeTaken={timeTaken} />;
             } catch (error) {
               console.error('Failed generating images', {
                 error,
@@ -298,7 +325,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           render: async function* (_props) {
             yield <Loading />;
 
-            const props = JSON.parse(JSON.parse(JSON.stringify(_props))) as typeof _props;
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props)) as string) as typeof _props;
             const { image_url } = props;
 
             // Fetch the image
@@ -334,6 +361,96 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             });
 
             return <div>{response.description}</div>;
+          },
+        },
+        user_count: {
+          description: 'Get the number of users in the system',
+          parameters: z.object({}).required(),
+          render: async function* () {
+            yield <Loading />;
+            const totalUsers = await clerkClient.users.getCount();
+
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'user_count',
+                content: JSON.stringify(totalUsers),
+              },
+            ]);
+
+            return <div>There are {totalUsers} users in the system</div>;
+          },
+        },
+        get_images: {
+          description: 'Get the previous images generated by the user',
+          parameters: z.object({}).required(),
+          render: async function* () {
+            yield <Loading />;
+
+            const { env } = getRequestContext();
+            const files = await env.KV.list({ prefix: `images:${userId}` });
+            const imageSets = await Promise.all(
+              files.keys.map(async (key) => {
+                const image = await env.KV.get<string>(key.name);
+                return image
+                  ? (JSON.parse(image) as {
+                      urls: string[];
+                      prompt: string;
+                      number_of_images: number;
+                      timeTaken: number;
+                      createdAt: string;
+                    })
+                  : null;
+              }),
+            ).then((images) => images.filter(Boolean));
+
+            if (imageSets.length === 0) {
+              return <div>No images found</div>;
+            }
+
+            return (
+              <div>
+                <h2>Previous images</h2>
+                <div>
+                  {imageSets
+                    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+                    .map((imageSet, index) => (
+                      <div key={index}>
+                        <h3>{imageSet.prompt}</h3>
+                        <Images prompt={imageSet.prompt} images={imageSet.urls} timeTaken={imageSet.timeTaken} />
+                      </div>
+                    ))}
+                </div>
+              </div>
+            );
+          },
+        },
+        get_weather_info: {
+          description: 'Get the weather information for the user',
+          parameters: z
+            .object({
+              location: z.string().describe('the location to get the weather for'),
+              latitude: z.number().describe('the latitude of the location'),
+              longitude: z.number().describe('the longitude of the location'),
+            })
+            .required(),
+          render: async function* (_props) {
+            yield <Loading />;
+
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props)) as string) as typeof _props;
+            const weatherInfo = await fetchWeatherData(props);
+
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'get_weather_info',
+                content: JSON.stringify(weatherInfo),
+              },
+            ]);
+
+            return <div>{weatherInfo}</div>;
           },
         },
         // get_flight_info: {
@@ -432,7 +549,9 @@ const retryPromise = async <T,>(promise: () => Promise<T>, retries = 3) => {
   throw error;
 };
 
-const createImage = async (prompt: string) => {
+const generateFileName = (prompt: string) => prompt.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+const createImage = async (userId: string, prompt: string) => {
   // Fetch the image
   const { env } = getRequestContext();
   const ai = new Ai(env.AI);
@@ -456,9 +575,86 @@ const createImage = async (prompt: string) => {
     prompt,
   });
 
-  // Convert the response into a base64 image
-  const base64 = btoa(new Uint8Array(response).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+  const file = new File([new Blob([response])], generateFileName(prompt));
 
-  // Return the image
-  return `data:image/png;base64,${base64}`;
+  console.info('Uploading image', {
+    prompt,
+    fileSize: file.size,
+    fileName: file.name,
+  });
+
+  // Upload the image to upload thing
+  const uploadedFileResponse = await uploadThing.uploadFiles(file);
+
+  // Check if the upload failed
+  if (uploadedFileResponse.error) {
+    console.error('Failed uploading image', {
+      error: uploadedFileResponse.error,
+    });
+    throw new Error('Failed uploading image');
+  }
+
+  console.info('Uploaded image', {
+    prompt,
+    url: uploadedFileResponse.data?.url,
+  });
+
+  // Return the image URL
+  return uploadedFileResponse.data?.url;
+};
+
+const fetchWeatherData = async (params: { latitude: number; longitude: number; location: string }) => {
+  const url = 'https://api.open-meteo.com/v1/forecast';
+  const responses = await fetchWeatherApi(url, {
+    latitude: params.latitude,
+    longitude: params.longitude,
+    hourly: 'temperature_2m',
+  });
+
+  // Helper function to form time ranges
+  const range = (start: number, stop: number, step: number) =>
+    Array.from({ length: (stop - start) / step }, (_, i) => start + i * step);
+
+  // Process first location. Add a for-loop for multiple locations or weather models
+  const response = responses[0];
+
+  // Attributes for timezone and location
+  const utcOffsetSeconds = response.utcOffsetSeconds();
+  const timezone = response.timezone();
+  const timezoneAbbreviation = response.timezoneAbbreviation();
+  const latitude = response.latitude();
+  const longitude = response.longitude();
+
+  const hourly = response.hourly()!;
+
+  // Note: The order of weather variables in the URL query and the indices below need to match!
+  const weatherData = {
+    hourly: {
+      time: range(Number(hourly.time()), Number(hourly.timeEnd()), hourly.interval()).map(
+        (t) => new Date((t + utcOffsetSeconds) * 1000),
+      ),
+      temperature2m: hourly.variables(0)!.valuesArray()!,
+    },
+  };
+
+  // Get the current time at hour mark
+  const now = new Date();
+  now.setHours(now.getHours(), 0, 0, 0);
+
+  // Find the current temperature
+  const currentTempIndex = weatherData.hourly.time.findIndex((time) => {
+    const hourTime = new Date(time);
+    hourTime.setHours(hourTime.getHours(), 0, 0, 0);
+    return hourTime.getTime() === now.getTime();
+  });
+  const currentTemp = weatherData.hourly.temperature2m[currentTempIndex];
+  const temps = Array.from(weatherData.hourly.temperature2m);
+
+  // Min and max temperature
+  const minTemp = Math.min(...temps);
+  const maxTemp = Math.max(...temps);
+
+  return `It is currently ${currentTemp.toFixed(0)}°C in ${params.location} with a high of ${maxTemp.toFixed(
+    0,
+  )}°C and a low of ${minTemp.toFixed(0)}°C`;
 };
