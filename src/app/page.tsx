@@ -39,24 +39,23 @@ export default function Page() {
   };
 
   return (
-    <main className="flex flex-col items-center h-[100dvh] w-full">
-      <div className="flex flex-col p-2 gap-2 items-center h-[100dvh] md:w-1/2 border">
+    <main className="flex flex-col items-center h-full w-full p-2">
+      <div className="flex flex-col p-2 gap-2 items-center h-full w-full">
         <Messages messages={messages} />
 
         <div className="flex flex-row gap-2 w-full">
-          <div className="w-10">
-            <UserButton />
-          </div>
-          <form className="flex w-full" onSubmit={onSubmit}>
+          <form className="flex w-full gap-1" onSubmit={onSubmit}>
             <input
-              className="text-black p-2 w-full"
+              className="dark:text-white p-2 w-full border dark:bg-[#181818] rounded"
               placeholder="Send a message..."
               value={inputValue}
+              type="text"
+              autoComplete="off"
               onChange={(event) => {
                 setInputValue(event.target.value);
               }}
             />
-            <button className="p-2 text-white bg-[#181818] border" type="submit">
+            <button className="p-2 dark:text-white border dark:bg-[#181818] rounded" type="submit">
               Send
             </button>
           </form>

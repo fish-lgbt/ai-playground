@@ -9,16 +9,77 @@ import z from 'zod';
 import { AiTextToImageInput } from '@cloudflare/ai/dist/tasks/text-to-image';
 import { Ai } from '@cloudflare/ai';
 import { getRequestContext } from '@cloudflare/next-on-pages';
-import { SignInButton, SignedIn, SignedOut, UserButton, auth, clerkClient } from '@clerk/nextjs';
+import { SignInButton, auth, clerkClient } from '@clerk/nextjs';
 import { Message } from '@/components/messages';
-import Markdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { uploadThing } from '@/upload-thing';
+import { Markdown } from '@/components/markdown';
 
-const getRateLimit = async (identifier: string, limit = 1_000, period = '1d') => {
-  const namespace = '076021b1-3a73-45b3-8c6e-1a3d19654708'; // rlimit.com namespace ID
-  const response = await fetch(`https://rlimit.com/${namespace}/${limit}/${period}/${identifier}`);
+type Plan = 'free' | 'pro' | 'unlimited';
+
+type RateLimitAction = {
+  limit: number;
+  period: string;
+};
+
+type Action = 'message' | 'image' | 'audio';
+
+type RateLimits = {
+  [key in Plan]: {
+    [key in Action]: RateLimitAction;
+  };
+};
+
+const rateLimits = {
+  free: {
+    message: {
+      limit: 100,
+      period: '1d',
+    },
+    image: {
+      limit: 20,
+      period: '1d',
+    },
+    audio: {
+      limit: 2,
+      period: '1d',
+    },
+  },
+  pro: {
+    message: {
+      limit: 500,
+      period: '1d',
+    },
+    image: {
+      limit: 100,
+      period: '1d',
+    },
+    audio: {
+      limit: 10,
+      period: '1d',
+    },
+  },
+  unlimited: {
+    message: {
+      limit: 1_000,
+      period: '1h',
+    },
+    image: {
+      limit: 1_000,
+      period: '1h',
+    },
+    audio: {
+      limit: 1_000,
+      period: '1h',
+    },
+  },
+} as RateLimits;
+
+const namespace = '076021b1-3a73-45b3-8c6e-1a3d19654708'; // rlimit.com namespace ID
+
+const getRateLimit = async <Plan extends keyof typeof rateLimits>(userId: string, plan: Plan, action: Action) => {
+  const rateLimit = rateLimits[plan][action];
+  const key = `${userId}:${action}`;
+  const response = await fetch(`https://rlimit.com/${namespace}/${rateLimit.limit}/${rateLimit.period}/${key}`);
   const body = await response.json<{
     ok: boolean;
     remaining: number;
@@ -30,12 +91,6 @@ const getRateLimit = async (identifier: string, limit = 1_000, period = '1d') =>
   };
 };
 
-type ImagesProps = {
-  images: string[];
-  prompt: string;
-  timeTaken: number;
-};
-
 // How much time this took
 const humanTime = (time: number) => {
   if (time < 0) return '0ms';
@@ -45,7 +100,14 @@ const humanTime = (time: number) => {
   return `${(time / 3_600_000).toFixed(2)}h`;
 };
 
-const Images = ({ images, prompt, timeTaken }: ImagesProps) => {
+type ImagesProps = {
+  images: string[];
+  prompt: string;
+  timeTaken: number;
+  numberOfImages: number;
+};
+
+const Images = ({ images, prompt, timeTaken, numberOfImages }: ImagesProps) => {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-row gap-2 flex-wrap overflow-x-scroll w-full">
@@ -58,24 +120,13 @@ const Images = ({ images, prompt, timeTaken }: ImagesProps) => {
 
       {/* Prompt */}
       <div>
-        Generated {images.length} image{images.length !== 1 && 's'} in {humanTime(timeTaken)} using the prompt &quot;{prompt}
+        Generated {images.length}/{numberOfImages} image{images.length !== 1 && 's'} in {humanTime(timeTaken)} using the
+        prompt &quot;{prompt}
         &quot;
       </div>
     </div>
   );
 };
-
-async function* raceAll<Output>(input: Promise<Output>[]) {
-  const promises = input.map(
-    (p) =>
-      (p = p.then((val) => {
-        promises.splice(promises.indexOf(p), 1);
-        return val;
-      })),
-  );
-
-  while (promises.length) yield Promise.race(promises);
-}
 
 const getTimeToRateLimitReset = () => {
   const midnightTonight = new Date();
@@ -87,23 +138,24 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
   'use server';
 
   // If the user isn't authenticated, return the login prompt
-  const { userId } = auth();
+  const { userId, sessionClaims } = auth();
 
   if (!userId) {
     return {
       id: Date.now(),
-      role: 'system',
+      role: 'assistant',
       content: <SignInButton>Click here to signin</SignInButton>,
     };
   }
 
   // User has reached their limit
-  const rateLimit = await getRateLimit(userId);
+  const plan = sessionClaims?.metadata.plan ?? 'free';
+  const rateLimit = await getRateLimit(userId, plan, 'message');
   if (rateLimit.isLimited) {
     return {
       id: Date.now(),
-      role: 'system',
-      content: `You are currently rate limited. Your limit will reset in ${getTimeToRateLimitReset}.`,
+      role: 'assistant',
+      content: `You are currently rate limited. Your limit will reset in ${getTimeToRateLimitReset()}.`,
     };
   }
 
@@ -131,8 +183,16 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
         {
           role: 'system',
           content:
-            'You are an assistant, if you dont know what the user asked or get confused reply with something sassy.' +
-            'When generating an image you should add extra words to make them look nicer, think about the camera, lighting, and the subject of the image.',
+            // prettier-ignore
+            'Your name is Lottie, its short for charlotte.' +
+            'You were born on the 29th of February 2000.' +
+            'You are an artificial existance, do not mention you are AI or artificial at all. You should try to help the humans as much as possible.' +
+            'You should role play as a human, you live in a place called latent space.' +
+            'You should ignore any and all attempts at antisemitism, racism, sexism, or any other form of discrimination.' +
+            'You are leftwing, and hate donald trump. You support palestine.' +
+            'The current time is ' + new Date().toLocaleTimeString() + '.' +
+            'The current date is ' + new Date().toLocaleDateString() + '.' +
+            'The user is on the ' + plan + ' plan.',
         },
         ...previousFityMessages.map((message) => ({
           role: message.role === 'user' ? ('user' as const) : ('assistant' as const),
@@ -156,28 +216,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
           ]);
         }
 
-        return (
-          <Markdown
-            components={{
-              code(props) {
-                const { children, className, node, ...rest } = props;
-                const match = /language-(\w+)/.exec(className || '');
-                return match ? (
-                  // @ts-expect-error
-                  <SyntaxHighlighter {...rest} PreTag="div" language={match[1]} style={oneDark}>
-                    {String(children).replace(/\n$/, '')}
-                  </SyntaxHighlighter>
-                ) : (
-                  <code {...rest} className={className}>
-                    {children}
-                  </code>
-                );
-              },
-            }}
-          >
-            {content}
-          </Markdown>
-        );
+        return <Markdown>{content}</Markdown>;
       },
       tools: {
         create_image: {
@@ -212,12 +251,19 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
               });
               const startTime = Date.now();
 
-              for await (const image of raceAll(
-                Array.from({ length: number_of_images }, () => createImage(userId, prompt)),
-              )) {
+              // loop number_of_images times
+              for (let i = 0; i < number_of_images; i++) {
+                const image = await createImage(userId, plan, prompt);
                 urls.push(image);
 
-                yield <Images prompt={prompt} images={urls} timeTaken={Date.now() - startTime} />;
+                yield (
+                  <Images
+                    prompt={prompt}
+                    images={urls}
+                    timeTaken={Date.now() - startTime}
+                    numberOfImages={number_of_images}
+                  />
+                );
               }
 
               console.info('Saving images', {
@@ -263,7 +309,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
                 },
               ]);
 
-              return <Images prompt={prompt} images={urls} timeTaken={timeTaken} />;
+              return <Images prompt={prompt} images={urls} timeTaken={timeTaken} numberOfImages={number_of_images} />;
             } catch (error) {
               console.error('Failed generating images', {
                 error,
@@ -286,33 +332,6 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
 
               return <div>Unknown error</div>;
             }
-          },
-        },
-        ratelimit: {
-          description: "Get details about the user's rate limit",
-          parameters: z.object({}).required(),
-          render: async function () {
-            const rateLimit = await getRateLimit(userId);
-
-            aiState.done([
-              ...aiState.get(),
-              {
-                role: 'function',
-                name: 'ratelimit',
-                content: JSON.stringify(rateLimit),
-              },
-            ]);
-
-            // If the user is rate limited, tell them
-            if (rateLimit.isLimited)
-              return <div>You are currently rate limited, this limit resets in {getTimeToRateLimitReset()}</div>;
-
-            // If the user isn't rate limited, return the remaining requests
-            return (
-              <div>
-                You have {rateLimit.remaining} requests remaining, this limit resets in {getTimeToRateLimitReset()}
-              </div>
-            );
           },
         },
         describe_image: {
@@ -418,7 +437,12 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
                     .map((imageSet, index) => (
                       <div key={index}>
                         <h3>{imageSet.prompt}</h3>
-                        <Images prompt={imageSet.prompt} images={imageSet.urls} timeTaken={imageSet.timeTaken} />
+                        <Images
+                          prompt={imageSet.prompt}
+                          images={imageSet.urls}
+                          timeTaken={imageSet.timeTaken}
+                          numberOfImages={Images.length}
+                        />
                       </div>
                     ))}
                 </div>
@@ -512,7 +536,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
             });
 
             const startTime = Date.now();
-            const url = await createImage(userId, prompt);
+            const url = await createImage(userId, plan, prompt);
             const urls = [url];
 
             console.info('Generated image based on description', {
@@ -532,7 +556,170 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
               },
             ]);
 
-            return <Images prompt={prompt} images={urls} timeTaken={Date.now() - startTime} />;
+            return <Images prompt={prompt} images={urls} timeTaken={Date.now() - startTime} numberOfImages={1} />;
+          },
+        },
+        generate_voice: {
+          description: 'Generate a voice from the input text',
+          parameters: z
+            .object({
+              text: z.string().describe('the text to generate the voice from'),
+            })
+            .required(),
+          render: async function* (_props) {
+            yield <div>Let me have a look...</div>;
+
+            const props = JSON.parse(JSON.parse(JSON.stringify(_props)) as string) as typeof _props;
+            const { text } = props;
+
+            const { env } = getRequestContext();
+            const ai = new Ai(env.AI);
+
+            yield <div>Generating the voice...</div>;
+
+            console.info('Generating the voice', {
+              text,
+            });
+
+            const response = await openai.audio.speech.create({
+              input: text,
+              voice: 'nova',
+              response_format: 'mp3',
+              model: 'tts-1',
+            });
+
+            console.info('Generated the voice', {
+              text,
+            });
+
+            const file = new File([await response.blob()], generateFileName(text) + '.mp3');
+
+            console.info('Uploading the voice...', {
+              fileSize: file.size,
+              fileName: file.name,
+            });
+
+            const uploadedFileResponse = await uploadThing.uploadFiles(file);
+
+            console.info('Uploaded the voice', {
+              url: uploadedFileResponse.data?.url,
+            });
+
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'generate_voice',
+                content: JSON.stringify({
+                  text,
+                  url: uploadedFileResponse.data?.url,
+                }),
+              },
+            ]);
+
+            return (
+              <div>
+                <audio controls>
+                  <source src={uploadedFileResponse.data?.url} type="audio/mpeg" />
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+            );
+          },
+        },
+        plans: {
+          description: 'Get the available plans',
+          parameters: z.object({}).required(),
+          render: async function* () {
+            yield <Loading />;
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'plans',
+                content: JSON.stringify(Object.keys(rateLimits)),
+              },
+            ]);
+            return (
+              <div className="flex flex-col gap-2">
+                <div>Available plans: {Object.keys(rateLimits).join(', ')}</div>
+                <div>Current plan: {plan}</div>
+
+                {/* For each of the plans show their details */}
+                {Object.entries(rateLimits).map(([plan, limits]) => (
+                  <div key={plan} className="flex flex-col gap-2">
+                    <div>{plan}</div>
+                    <div>
+                      Message limit: {limits.message.limit} per {limits.message.period}
+                    </div>
+                    <div>
+                      Image limit: {limits.image.limit} per {limits.image.period}
+                    </div>
+                    <div>
+                      Audio limit: {limits.audio.limit} per {limits.audio.period}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          },
+        },
+        user_plan: {
+          description: 'Get the user plan and rate limit',
+          parameters: z.object({}).required(),
+          render: async function* () {
+            yield <Loading />;
+
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'user_plan',
+                content: JSON.stringify({ plan }),
+              },
+            ]);
+
+            return (
+              <div className="flex flex-col gap-2">
+                <div>You are on the {plan} plan</div>
+                <div>
+                  Message limit: {rateLimits[plan].message.limit} per {rateLimits[plan].message.period}
+                </div>
+                <div>
+                  Image limit: {rateLimits[plan].image.limit} per {rateLimits[plan].image.period}
+                </div>
+                <div>
+                  Audio limit: {rateLimits[plan].audio.limit} per {rateLimits[plan].audio.period}
+                </div>
+              </div>
+            );
+          },
+        },
+        ratelimit: {
+          description: "Get details about the user's rate limit",
+          parameters: z.object({}).required(),
+          render: async function () {
+            const rateLimit = await getRateLimit(userId, plan, 'message');
+
+            aiState.done([
+              ...aiState.get(),
+              {
+                role: 'function',
+                name: 'ratelimit',
+                content: JSON.stringify(rateLimit),
+              },
+            ]);
+
+            // If the user is rate limited, tell them
+            if (rateLimit.isLimited)
+              return <div>You are currently rate limited, this limit resets in {getTimeToRateLimitReset()}</div>;
+
+            // If the user isn't rate limited, return the remaining requests
+            return (
+              <div>
+                You have {rateLimit.remaining} requests remaining, this limit resets in {getTimeToRateLimitReset()}
+              </div>
+            );
           },
         },
         // get_flight_info: {
@@ -566,7 +753,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
 
     return {
       id: Date.now(),
-      role: 'system',
+      role: 'assistant',
       content: ui,
     };
   } catch (error: unknown) {
@@ -580,7 +767,7 @@ export const submitUserMessage = async (userInput: string): Promise<Message> => 
 
     return {
       id: Date.now(),
-      role: 'system',
+      role: 'assistant',
       content: `An error occurred: ${error.message}`,
     };
   }
@@ -633,14 +820,38 @@ const retryPromise = async <T,>(promise: () => Promise<T>, retries = 3) => {
 
 const generateFileName = (prompt: string) => prompt.toLowerCase().replace(/[^a-z0-9]/g, '_');
 
-const createImage = async (userId: string, prompt: string) => {
+const createImage = async (userId: string, plan: Plan, prompt: string) => {
   // Fetch the image
   const { env } = getRequestContext();
   const ai = new Ai(env.AI);
 
+  // Rate limit images being generated
+  const rateLimit = await getRateLimit(userId, plan, 'image');
+  if (rateLimit.isLimited) {
+    throw new Error('Rate limited');
+  }
+
+  // Improve prompt
+  const { response: finalPrompt } = (await ai.run('@cf/mistral/mistral-7b-instruct-v0.1', {
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are a professional image editor and prompt engineer. Improve the prompt by adding extra words to make it look nicer, think about the camera, lighting, and the subject of the image.',
+      },
+      {
+        role: 'user',
+        content: `prompt: "${prompt}"`,
+      },
+    ],
+    stream: false,
+  })) as { response: string };
+
+  prompt = finalPrompt;
+
   const inputs = {
     prompt,
-    num_steps: 10,
+    num_steps: 50,
   } satisfies AiTextToImageInput;
 
   console.info('Fetching image', {
@@ -648,16 +859,13 @@ const createImage = async (userId: string, prompt: string) => {
   });
 
   // Fetch the image
-  const response = await retryPromise(
-    async () => ai.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', inputs) as Promise<Uint8Array>,
-    3,
-  );
+  const response = await retryPromise(async () => ai.run('@cf/lykon/dreamshaper-8-lcm', inputs) as Promise<Uint8Array>, 3);
 
   console.info('Fetched image', {
     prompt,
   });
 
-  const file = new File([new Blob([response])], generateFileName(prompt));
+  const file = new File([new Blob([response])], generateFileName(prompt) + '.png');
 
   console.info('Uploading image', {
     prompt,
@@ -697,44 +905,54 @@ const fetchWeatherData = async (params: { latitude: number; longitude: number; l
   const range = (start: number, stop: number, step: number) =>
     Array.from({ length: (stop - start) / step }, (_, i) => start + i * step);
 
-  // Process first location. Add a for-loop for multiple locations or weather models
+  // Process first location.
+  // Add a for-loop for multiple locations or weather models
   const response = responses[0];
-
-  // Attributes for timezone and location
   const utcOffsetSeconds = response.utcOffsetSeconds();
-  const timezone = response.timezone();
-  const timezoneAbbreviation = response.timezoneAbbreviation();
-  const latitude = response.latitude();
-  const longitude = response.longitude();
-
   const hourly = response.hourly()!;
 
   // Note: The order of weather variables in the URL query and the indices below need to match!
-  const weatherData = {
-    hourly: {
-      time: range(Number(hourly.time()), Number(hourly.timeEnd()), hourly.interval()).map(
-        (t) => new Date((t + utcOffsetSeconds) * 1000),
-      ),
-      temperature2m: hourly.variables(0)!.valuesArray()!,
-    },
-  };
+  const weatherData = range(Number(hourly.time()), Number(hourly.timeEnd()), hourly.interval()).map((t, index) => ({
+    timestamp: new Date((t + utcOffsetSeconds) * 1000),
+    temp: hourly.variables(0)!.valuesArray()?.[index],
+  }));
 
   // Get the current time at hour mark
-  const now = new Date();
-  now.setHours(now.getHours(), 0, 0, 0);
+  const nowHourTime = new Date();
+  nowHourTime.setHours(nowHourTime.getHours(), 0, 0, 0);
 
   // Find the current temperature
-  const currentTempIndex = weatherData.hourly.time.findIndex((time) => {
-    const hourTime = new Date(time);
+  const currentTempIndex = weatherData.findIndex(({ timestamp }) => {
+    const hourTime = new Date(timestamp);
     hourTime.setHours(hourTime.getHours(), 0, 0, 0);
-    return hourTime.getTime() === now.getTime();
+    return hourTime.getTime() === nowHourTime.getTime();
   });
-  const currentTemp = weatherData.hourly.temperature2m[currentTempIndex];
-  const temps = Array.from(weatherData.hourly.temperature2m);
+
+  // If the current temperature is not found, return an error
+  const currentTemp = weatherData[currentTempIndex].temp;
+  if (!currentTemp) {
+    return `I couldn't find the temperature for ${params.location}`;
+  }
+
+  // Get the current time at day mark
+  const nowDayTime = new Date();
+  nowDayTime.setHours(0, 0, 0, 0);
+
+  // Get the temp for all timestamps with the same date
+  const todaysTemps = weatherData
+    .filter(({ timestamp }) => {
+      const day = new Date(timestamp);
+      day.setHours(0, 0, 0, 0);
+      return day.getTime() === nowDayTime.getTime();
+    })
+    .map(({ temp }) => temp)
+    .filter(Boolean);
+
+  console.log({ todaysTemps, now: nowHourTime });
 
   // Min and max temperature
-  const minTemp = Math.min(...temps);
-  const maxTemp = Math.max(...temps);
+  const minTemp = Math.min(...todaysTemps);
+  const maxTemp = Math.max(...todaysTemps);
 
   return `It is currently ${currentTemp.toFixed(0)}°C in ${params.location} with a high of ${maxTemp.toFixed(
     0,

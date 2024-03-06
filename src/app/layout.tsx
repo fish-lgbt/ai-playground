@@ -1,9 +1,10 @@
+/* eslint-disable @next/next/no-img-element */
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { AI } from './action';
-import { ClerkProvider } from '@clerk/nextjs';
-import { dark } from '@clerk/themes';
+import { AppShell } from '@/components/app-shell';
+import { ClerkProvider } from '@/components/clerk-provider';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -18,14 +19,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider
-      appearance={{
-        baseTheme: dark,
-      }}
-    >
+    <ClerkProvider>
       <html lang="en">
         <body className={inter.className}>
-          <AI>{children}</AI>
+          <AI>
+            <AppShell>{children}</AppShell>
+          </AI>
         </body>
       </html>
     </ClerkProvider>
