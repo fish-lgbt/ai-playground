@@ -7,10 +7,10 @@ import { Messages } from '@/components/messages';
 
 export const runtime = 'edge';
 
-export default function Chat() {
+export default function Images() {
   const [inputValue, setInputValue] = useState('');
   const [messages, setMessages] = useUIState<typeof AI>();
-  const { submitUserMessage } = useActions<typeof AI>() as Actions;
+  const { generateImage } = useActions<typeof AI>() as Actions;
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -33,20 +33,21 @@ export default function Chat() {
     setInputValue('');
 
     // Submit and get response message
-    const responseMessage = await submitUserMessage(inputValue);
+    const responseMessage = await generateImage(inputValue, 1);
     setMessages((currentMessages) => [...currentMessages, responseMessage]);
   };
 
   return (
     <main className="flex flex-col items-center h-full w-full p-2">
       <div className="flex flex-col p-2 gap-2 items-center h-full w-full">
+        {/* Replace the below with an image gallery */}
         <Messages messages={messages} />
 
         <div className="flex flex-row gap-2 w-full">
           <form className="flex w-full gap-1" onSubmit={onSubmit}>
             <input
               className="dark:text-white p-2 w-full border dark:bg-[#181818] rounded"
-              placeholder="Send a message..."
+              placeholder="Write your prompt here..."
               value={inputValue}
               type="text"
               autoComplete="off"
